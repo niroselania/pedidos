@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gestor de pedidos</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 24px;
+        background: #f7f7f7;
+      }
+      .card {
+        background: white;
+        padding: 16px;
+        border-radius: 8px;
+        margin-bottom: 16px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+      }
+      h1 {
+        margin-top: 0;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+      }
+      input,
+      button {
+        padding: 8px;
+        font-size: 14px;
+      }
+      button {
+        cursor: pointer;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #fff;
+      }
+      th,
+      td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+      }
+      th {
+        background: #f0f0f0;
+      }
+      .right {
+        text-align: right;
+      }
+      .status {
+        font-size: 14px;
+        color: #444;
+      }
+      .danger {
+        color: #b00020;
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  </head>
+  <body>
+    <h1>Gestor de pedidos</h1>
+
+    <div class="card">
+      <h3>1) Subir planilla de productos al servidor</h3>
+      <div class="row">
+        <input type="file" id="catalogFile" accept=".xlsx,.xls,.csv" />
+        <button id="uploadBtn">Subir catalogo</button>
+      </div>
+      <div id="catalogStatus" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h3>2) Cargar pedido por codigo</h3>
+      <div class="row">
+        <input id="codigoInput" placeholder="CODIGO" />
+        <input id="cantidadInput" type="number" min="1" value="1" placeholder="CANTIDAD" />
+        <button id="agregarBtn">Agregar al pedido</button>
+      </div>
+      <div id="msg" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h3>3) Pedido actual</h3>
+      <table id="pedidoTable">
+        <thead>
+          <tr>
+            <th>CODIGO</th>
+            <th>COLOR</th>
+            <th>TALLE</th>
+            <th>DESCRIPCION</th>
+            <th>CANTIDAD</th>
+            <th>PRECIO U.</th>
+            <th>TOTAL</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+        <tfoot>
+          <tr>
+            <td colspan="6" class="right"><strong>Total pedido</strong></td>
+            <td id="totalPedido" class="right">0.00</td>
+          </tr>
+        </tfoot>
+      </table>
+      <div class="row" style="margin-top: 12px">
+        <button id="downloadBtn">Download Excel del pedido</button>
+      </div>
+    </div>
+
+    <script>
+      const uploadBtn = document.getElementById("uploadBtn");
+      const agregarBtn = document.getElementById("agregarBtn");
+      const downloadBtn = document.getElementById("downloadBtn");
+      const msg = document.getElementById("msg");
+      const catalogStatus = document.getElementById("catalogStatus");
+      const tbody = document.querySelector("#pedidoTable tbody");
+      const totalPedidoEl = document.getElementById("totalPedido");
+
+      const pedido = [];
+
+      function setMessage(text, isError = false) {
+        msg.textContent = text;
+        msg.classList.toggle("danger", isError);
+      }
+
+      function money(value) {
+        return Number(value || 0).toFixed(2);
+      }
+
+      function renderPedido() {
+        tbody.innerHTML = "";
+        let totalPedido = 0;
+
+        pedido.forEach((item) => {
+          totalPedido += item.TOTAL;
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${item.CODIGO}</td>
+            <td>${item.COLOR}</td>
+            <td>${item.TALLE}</td>
+            <td>${item.DESCRIPCION}</td>
+            <td class="right">${item.CANTIDAD}</td>
+            <td class="right">${money(item["PRECIO U."])}</td>
+            <td class="right">${money(item.TOTAL)}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+
+        totalPedidoEl.textContent = money(totalPedido);
+      }
+
+      async function refreshCatalogStatus() {
+        try {
+          const res = await fetch("/api/catalog/status");
+          const data = await res.json();
+          catalogStatus.textContent = data.loaded
+            ? `Catalogo cargado con ${data.items} productos.`
+            : "Todavia no hay catalogo cargado.";
+        } catch {
+          catalogStatus.textContent = "No se pudo consultar el estado del catalogo.";
+        }
+      }
+
+      uploadBtn.addEventListener("click", async () => {
+        const fileInput = document.getElementById("catalogFile");
+        if (!fileInput.files.length) {
+          catalogStatus.textContent = "Selecciona una planilla primero.";
+          return;
+        }
+
+        const fd = new FormData();
+        fd.append("file", fileInput.files[0]);
+
+        try {
+          const res = await fetch("/api/catalog/upload", {
+            method: "POST",
+            body: fd
+          });
+          const data = await res.json();
+
+          if (!res.ok) {
+            catalogStatus.textContent = data.error || "Error al subir catalogo.";
+            return;
+          }
+
+          catalogStatus.textContent = data.message;
+          refreshCatalogStatus();
+        } catch {
+          catalogStatus.textContent = "No se pudo conectar con el servidor.";
+        }
+      });
+
+      agregarBtn.addEventListener("click", async () => {
+        const codigo = document.getElementById("codigoInput").value.trim().toUpperCase();
+        const cantidad = Number(document.getElementById("cantidadInput").value || 0);
+
+        if (!codigo) {
+          setMessage("Ingresa un codigo de producto.", true);
+          return;
+        }
+        if (!cantidad || cantidad <= 0) {
+          setMessage("La cantidad debe ser mayor a 0.", true);
+          return;
+        }
+
+        try {
+          const res = await fetch(`/api/product/${encodeURIComponent(codigo)}`);
+          const data = await res.json();
+
+          if (!res.ok) {
+            setMessage(data.error || "No se pudo buscar el producto.", true);
+            return;
+          }
+
+          const precioU = Number(data.PRECIO) || 0;
+          const row = {
+            CODIGO: data.CODIGO,
+            COLOR: data.COLOR,
+            TALLE: data.TALLE,
+            DESCRIPCION: data.DESCRIPCION,
+            CANTIDAD: cantidad,
+            "PRECIO U.": precioU,
+            TOTAL: precioU * cantidad
+          };
+
+          pedido.push(row);
+          renderPedido();
+          setMessage(`Producto ${codigo} agregado al pedido.`);
+        } catch {
+          setMessage("No se pudo conectar con el servidor.", true);
+        }
+      });
+
+      downloadBtn.addEventListener("click", () => {
+        if (!pedido.length) {
+          setMessage("El pedido esta vacio.", true);
+          return;
+        }
+
+        const totalGeneral = pedido.reduce((acc, item) => acc + (Number(item.TOTAL) || 0), 0);
+        const exportRows = pedido.map((item) => ({
+          CODIGO: item.CODIGO,
+          COLOR: item.COLOR,
+          TALLE: item.TALLE,
+          DESCRIPCION: item.DESCRIPCION,
+          CANTIDAD: item.CANTIDAD,
+          "PRECIO U.": Number(item["PRECIO U."]) || 0,
+          TOTAL: Number(item.TOTAL) || 0
+        }));
+
+        // Agregamos un bloque final para que quede visible el total del pedido.
+        exportRows.push({
+          CODIGO: "",
+          COLOR: "",
+          TALLE: "",
+          DESCRIPCION: "",
+          CANTIDAD: "",
+          "PRECIO U.": "",
+          TOTAL: ""
+        });
+        exportRows.push({
+          CODIGO: "",
+          COLOR: "",
+          TALLE: "",
+          DESCRIPCION: "",
+          CANTIDAD: "",
+          "PRECIO U.": "TOTAL GENERAL",
+          TOTAL: totalGeneral
+        });
+
+        const ws = XLSX.utils.json_to_sheet(exportRows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Pedido");
+        XLSX.writeFile(wb, "pedido_para_clienta.xlsx");
+      });
+
+      refreshCatalogStatus();
+    </script>
+  </body>
+</html>

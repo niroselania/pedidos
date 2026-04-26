@@ -1,0 +1,16 @@
+services:
+  pedidos-app:
+    build: .
+    container_name: pedidos-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+    volumes:
+      - pedidos_data:/app/data
+      - pedidos_uploads:/app/uploads
+
+volumes:
+  pedidos_data:
+  pedidos_uploads:
