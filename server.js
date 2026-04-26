@@ -35,6 +35,10 @@ function normalizeColor(value) {
   return normalizeText(value).toUpperCase();
 }
 
+function normalizeSize(value) {
+  return normalizeText(value).toUpperCase();
+}
+
 function readCatalog() {
   if (!fs.existsSync(catalogPath)) return [];
   const raw = fs.readFileSync(catalogPath, "utf8");
@@ -83,11 +87,21 @@ app.post("/api/catalog/upload", upload.single("file"), (req, res) => {
 app.get("/api/product/:codigo", (req, res) => {
   const code = normalizeCode(req.params.codigo);
   const color = normalizeColor(req.query.color);
+  const talle = normalizeSize(req.query.talle);
   const catalog = readCatalog();
   let product = null;
 
-  if (color) {
+  if (color && talle) {
+    product = catalog.find(
+      (item) =>
+        item.CODIGO === code &&
+        normalizeColor(item.COLOR) === color &&
+        normalizeSize(item.TALLE) === talle
+    );
+  } else if (color) {
     product = catalog.find((item) => item.CODIGO === code && normalizeColor(item.COLOR) === color);
+  } else if (talle) {
+    product = catalog.find((item) => item.CODIGO === code && normalizeSize(item.TALLE) === talle);
   } else {
     product = catalog.find((item) => item.CODIGO === code);
   }

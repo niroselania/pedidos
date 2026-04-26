@@ -74,10 +74,11 @@
     </div>
 
     <div class="card">
-      <h3>2) Cargar pedido por codigo + color</h3>
+      <h3>2) Cargar pedido por codigo + color + talle</h3>
       <div class="row">
         <input id="codigoInput" placeholder="CODIGO" />
         <input id="colorInput" placeholder="COLOR (opcional)" />
+        <input id="talleInput" placeholder="TALLE (opcional)" />
         <input id="cantidadInput" type="number" min="1" value="1" placeholder="CANTIDAD" />
         <button id="agregarBtn">Agregar al pedido</button>
       </div>
@@ -197,6 +198,7 @@
       agregarBtn.addEventListener("click", async () => {
         const codigo = document.getElementById("codigoInput").value.trim().toUpperCase();
         const color = document.getElementById("colorInput").value.trim().toUpperCase();
+        const talle = document.getElementById("talleInput").value.trim().toUpperCase();
         const cantidad = Number(document.getElementById("cantidadInput").value || 0);
 
         if (!codigo) {
@@ -212,6 +214,9 @@
           const params = new URLSearchParams();
           if (color) {
             params.set("color", color);
+          }
+          if (talle) {
+            params.set("talle", talle);
           }
           const query = params.toString();
           const res = await fetch(
@@ -238,7 +243,7 @@
           pedido.push(row);
           renderPedido();
           setMessage(
-            `Producto ${codigo}${color ? ` (${color})` : ""} agregado al pedido.`
+            `Producto ${codigo}${color ? ` (${color})` : ""}${talle ? ` Talle ${talle}` : ""} agregado al pedido.`
           );
         } catch {
           setMessage("No se pudo conectar con el servidor.", true);
