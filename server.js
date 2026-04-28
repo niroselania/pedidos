@@ -39,6 +39,23 @@ function normalizeSize(value) {
   return normalizeText(value).toUpperCase();
 }
 
+function readMinoristaPrice(row) {
+  const raw =
+    row["PRECIO MINORISTA"] ??
+    row.PRECIO_MINORISTA ??
+    row.PRECIO ??
+    row["PRECIO LISTA"];
+  return Number(raw) || 0;
+}
+
+function readMayoristaPrice(row) {
+  const raw =
+    row["PRECIO MAYORISTA"] ??
+    row.PRECIO_MAYORISTA ??
+    row.PRECIO_MAY;
+  return Number(raw) || 0;
+}
+
 function readCatalog() {
   if (!fs.existsSync(catalogPath)) return [];
   const raw = fs.readFileSync(catalogPath, "utf8");
@@ -65,7 +82,8 @@ app.post("/api/catalog/upload", upload.single("file"), (req, res) => {
         COLOR: normalizeText(r.COLOR),
         TALLE: normalizeText(r.TALLE),
         DESCRIPCION: normalizeText(r.DESCRIPCION),
-        PRECIO: Number(r.PRECIO) || 0
+        PRECIO: readMinoristaPrice(r),
+        PRECIO_MAYORISTA: readMayoristaPrice(r)
       }))
       .filter((r) => r.CODIGO);
 
@@ -99,9 +117,13 @@ app.get("/api/product/:codigo", (req, res) => {
         normalizeSize(item.TALLE) === talle
     );
   } else if (color) {
-    product = catalog.find((item) => item.CODIGO === code && normalizeColor(item.COLOR) === color);
+    product = catalog.find(
+      (item) => item.CODIGO === code && normalizeColor(item.COLOR) === color
+    );
   } else if (talle) {
-    product = catalog.find((item) => item.CODIGO === code && normalizeSize(item.TALLE) === talle);
+    product = catalog.find(
+      (item) => item.CODIGO === code && normalizeSize(item.TALLE) === talle
+    );
   } else {
     product = catalog.find((item) => item.CODIGO === code);
   }

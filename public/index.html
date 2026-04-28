@@ -25,9 +25,11 @@
         gap: 8px;
         flex-wrap: wrap;
         margin-bottom: 10px;
+        align-items: center;
       }
       input,
-      button {
+      button,
+      select {
         padding: 8px;
         font-size: 14px;
       }
@@ -58,6 +60,11 @@
       .danger {
         color: #b00020;
       }
+      .hint {
+        font-size: 13px;
+        color: #555;
+        margin-top: 8px;
+      }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   </head>
@@ -71,14 +78,24 @@
         <button id="uploadBtn">Subir catalogo</button>
       </div>
       <div id="catalogStatus" class="status"></div>
+      <p class="hint">
+        Columnas de tu planilla: <strong>CODIGO</strong>, <strong>COLOR</strong>, <strong>TALLE</strong>,
+        <strong>DESCRIPCION</strong>, <strong>PRECIO MINORISTA</strong>, <strong>PRECIO MAYORISTA</strong>.
+        En el pedido, <strong>Mayorista NO</strong> usa precio minorista; <strong>SI</strong> usa precio mayorista.
+      </p>
     </div>
 
     <div class="card">
-      <h3>2) Cargar pedido por codigo + color + talle</h3>
+      <h3>2) Cargar pedido por codigo + color + talle + mayorista</h3>
       <div class="row">
         <input id="codigoInput" placeholder="CODIGO" />
         <input id="colorInput" placeholder="COLOR (opcional)" />
         <input id="talleInput" placeholder="TALLE (opcional)" />
+        <label for="mayoristaInput" style="font-size: 14px">Mayorista</label>
+        <select id="mayoristaInput" title="SI usa PRECIO MAYORISTA; NO usa PRECIO MINORISTA">
+          <option value="NO">NO</option>
+          <option value="SI">SI</option>
+        </select>
         <input id="cantidadInput" type="number" min="1" value="1" placeholder="CANTIDAD" />
         <button id="agregarBtn">Agregar al pedido</button>
       </div>
@@ -94,6 +111,7 @@
             <th>COLOR</th>
             <th>TALLE</th>
             <th>DESCRIPCION</th>
+            <th>MAYORISTA</th>
             <th>CANTIDAD</th>
             <th>PRECIO U.</th>
             <th>TOTAL</th>
@@ -102,7 +120,7 @@
         <tbody></tbody>
         <tfoot>
           <tr>
-            <td colspan="6" class="right"><strong>Total pedido</strong></td>
+            <td colspan="7" class="right"><strong>Total pedido</strong></td>
             <td id="totalPedido" class="right">0.00</td>
           </tr>
         </tfoot>
@@ -144,6 +162,7 @@
             <td>${item.COLOR}</td>
             <td>${item.TALLE}</td>
             <td>${item.DESCRIPCION}</td>
+            <td>${item.MAYORISTA}</td>
             <td class="right">${item.CANTIDAD}</td>
             <td class="right">${money(item["PRECIO U."])}</td>
             <td class="right">${money(item.TOTAL)}</td>
@@ -199,6 +218,7 @@
         const codigo = document.getElementById("codigoInput").value.trim().toUpperCase();
         const color = document.getElementById("colorInput").value.trim().toUpperCase();
         const talle = document.getElementById("talleInput").value.trim().toUpperCase();
+        const mayorista = document.getElementById("mayoristaInput").value;
         const cantidad = Number(document.getElementById("cantidadInput").value || 0);
 
         if (!codigo) {
@@ -212,12 +232,8 @@
 
         try {
           const params = new URLSearchParams();
-          if (color) {
-            params.set("color", color);
-          }
-          if (talle) {
-            params.set("talle", talle);
-          }
+          if (color) params.set("color", color);
+          if (talle) params.set("talle", talle);
           const query = params.toString();
           const res = await fetch(
             `/api/product/${encodeURIComponent(codigo)}${query ? `?${query}` : ""}`
@@ -229,12 +245,27 @@
             return;
           }
 
-          const precioU = Number(data.PRECIO) || 0;
+          const precioMinorista = Number(data.PRECIO) || 0;
+          const precioMayorista = Number(data.PRECIO_MAYORISTA) || 0;
+          let precioU = precioMinorista;
+
+          if (mayorista === "SI") {
+            if (!precioMayorista) {
+              setMessage(
+                "Mayorista SI pero este producto no tiene PRECIO MAYORISTA en el listado (o es 0). Revisa la planilla.",
+                true
+              );
+              return;
+            }
+            precioU = precioMayorista;
+          }
+
           const row = {
             CODIGO: data.CODIGO,
             COLOR: data.COLOR,
             TALLE: data.TALLE,
             DESCRIPCION: data.DESCRIPCION,
+            MAYORISTA: mayorista,
             CANTIDAD: cantidad,
             "PRECIO U.": precioU,
             TOTAL: precioU * cantidad
@@ -243,7 +274,8 @@
           pedido.push(row);
           renderPedido();
           setMessage(
-            `Producto ${codigo}${color ? ` (${color})` : ""}${talle ? ` Talle ${talle}` : ""} agregado al pedido.`
+            `Producto ${codigo}${color ? ` (${color})` : ""}${talle ? ` Talle ${talle}` : ""} ` +
+              `(${mayorista === "SI" ? "precio mayorista" : "precio minorista"}) agregado al pedido.`
           );
         } catch {
           setMessage("No se pudo conectar con el servidor.", true);
@@ -262,17 +294,18 @@
           COLOR: item.COLOR,
           TALLE: item.TALLE,
           DESCRIPCION: item.DESCRIPCION,
+          MAYORISTA: item.MAYORISTA,
           CANTIDAD: item.CANTIDAD,
           "PRECIO U.": Number(item["PRECIO U."]) || 0,
           TOTAL: Number(item.TOTAL) || 0
         }));
 
-        // Agregamos un bloque final para que quede visible el total del pedido.
         exportRows.push({
           CODIGO: "",
           COLOR: "",
           TALLE: "",
           DESCRIPCION: "",
+          MAYORISTA: "",
           CANTIDAD: "",
           "PRECIO U.": "",
           TOTAL: ""
@@ -282,6 +315,7 @@
           COLOR: "",
           TALLE: "",
           DESCRIPCION: "",
+          MAYORISTA: "",
           CANTIDAD: "",
           "PRECIO U.": "TOTAL GENERAL",
           TOTAL: totalGeneral
