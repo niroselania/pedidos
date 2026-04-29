@@ -88,6 +88,13 @@
     <div class="card">
       <h3>2) Cargar pedido por codigo + color + talle + mayorista</h3>
       <div class="row">
+        <input id="clienteInput" placeholder="CLIENTE" />
+        <input id="pedidoNumeroInput" placeholder="N° PEDIDO" />
+        <button id="togglePedidoBtn">Abrir pedido</button>
+        <button id="llamarPedidoBtn">Llamar pedido abierto</button>
+      </div>
+      <div id="pedidoStatus" class="status"></div>
+      <div class="row">
         <input id="codigoInput" placeholder="CODIGO" />
         <input id="colorInput" placeholder="COLOR (opcional)" />
         <input id="talleInput" placeholder="TALLE (opcional)" />
@@ -134,12 +141,19 @@
       const uploadBtn = document.getElementById("uploadBtn");
       const agregarBtn = document.getElementById("agregarBtn");
       const downloadBtn = document.getElementById("downloadBtn");
+      const togglePedidoBtn = document.getElementById("togglePedidoBtn");
+      const llamarPedidoBtn = document.getElementById("llamarPedidoBtn");
       const msg = document.getElementById("msg");
+      const pedidoStatus = document.getElementById("pedidoStatus");
       const catalogStatus = document.getElementById("catalogStatus");
       const tbody = document.querySelector("#pedidoTable tbody");
       const totalPedidoEl = document.getElementById("totalPedido");
 
       const pedido = [];
+      let pedidoAbierto = false;
+      let clienteActual = "";
+      let numeroPedidoActual = "";
+      const OPEN_ORDERS_STORAGE_KEY = "gestorPedidosOpenOrders";
 
       function setMessage(text, isError = false) {
         msg.textContent = text;
@@ -148,6 +162,61 @@
 
       function money(value) {
         return Number(value || 0).toFixed(2);
+      }
+
+      function fileSafeText(value) {
+        return String(value || "")
+          .trim()
+          .replace(/[\\/:*?"<>|]/g, "_")
+          .replace(/\s+/g, "_");
+      }
+
+      function getSavedOpenOrders() {
+        try {
+          const raw = localStorage.getItem(OPEN_ORDERS_STORAGE_KEY);
+          if (!raw) return {};
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function saveOpenOrders(openOrders) {
+        localStorage.setItem(OPEN_ORDERS_STORAGE_KEY, JSON.stringify(openOrders));
+      }
+
+      function saveCurrentOrder() {
+        if (!pedidoAbierto || !numeroPedidoActual) return;
+        const openOrders = getSavedOpenOrders();
+        openOrders[numeroPedidoActual] = {
+          numeroPedido: numeroPedidoActual,
+          cliente: clienteActual,
+          items: pedido
+        };
+        saveOpenOrders(openOrders);
+      }
+
+      function deleteSavedOrder(numeroPedido) {
+        const openOrders = getSavedOpenOrders();
+        if (openOrders[numeroPedido]) {
+          delete openOrders[numeroPedido];
+          saveOpenOrders(openOrders);
+        }
+      }
+
+      function updatePedidoUIState() {
+        const clienteInput = document.getElementById("clienteInput");
+        const pedidoNumeroInput = document.getElementById("pedidoNumeroInput");
+        clienteInput.disabled = pedidoAbierto;
+        pedidoNumeroInput.disabled = false;
+        agregarBtn.disabled = !pedidoAbierto;
+        downloadBtn.disabled = !pedidoAbierto;
+        togglePedidoBtn.textContent = pedidoAbierto ? "Cerrar pedido y bajar Excel" : "Abrir pedido";
+        llamarPedidoBtn.disabled = false;
+        pedidoStatus.textContent = pedidoAbierto
+          ? `Pedido abierto: #${numeroPedidoActual} - Cliente: ${clienteActual}`
+          : "No hay pedido abierto.";
       }
 
       function renderPedido() {
@@ -171,6 +240,48 @@
         });
 
         totalPedidoEl.textContent = money(totalPedido);
+      }
+
+      function downloadPedidoExcel() {
+        if (!pedido.length) {
+          setMessage("El pedido esta vacio.", true);
+          return false;
+        }
+
+        const totalGeneral = pedido.reduce((acc, item) => acc + (Number(item.TOTAL) || 0), 0);
+        const exportRows = pedido.map((item) => ({
+          "N° PEDIDO": numeroPedidoActual,
+          CLIENTE: clienteActual,
+          CODIGO: item.CODIGO,
+          COLOR: item.COLOR,
+          TALLE: item.TALLE,
+          DESCRIPCION: item.DESCRIPCION,
+          MAYORISTA: item.MAYORISTA,
+          CANTIDAD: item.CANTIDAD,
+          "PRECIO U.": Number(item["PRECIO U."]) || 0,
+          TOTAL: Number(item.TOTAL) || 0
+        }));
+
+        exportRows.push({
+          "N° PEDIDO": "",
+          CLIENTE: "",
+          CODIGO: "",
+          COLOR: "",
+          TALLE: "",
+          DESCRIPCION: "",
+          MAYORISTA: "",
+          CANTIDAD: "",
+          "PRECIO U.": "TOTAL GENERAL",
+          TOTAL: totalGeneral
+        });
+
+        const ws = XLSX.utils.json_to_sheet(exportRows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Pedido");
+        const clienteFile = fileSafeText(clienteActual) || "cliente";
+        const pedidoFile = fileSafeText(numeroPedidoActual) || "sin_numero";
+        XLSX.writeFile(wb, `pedido_${pedidoFile}_${clienteFile}.xlsx`);
+        return true;
       }
 
       async function refreshCatalogStatus() {
@@ -215,6 +326,11 @@
       });
 
       agregarBtn.addEventListener("click", async () => {
+        if (!pedidoAbierto) {
+          setMessage("Primero abre un pedido con cliente y numero.", true);
+          return;
+        }
+
         const codigo = document.getElementById("codigoInput").value.trim().toUpperCase();
         const color = document.getElementById("colorInput").value.trim().toUpperCase();
         const talle = document.getElementById("talleInput").value.trim().toUpperCase();
@@ -272,6 +388,7 @@
           };
 
           pedido.push(row);
+          saveCurrentOrder();
           renderPedido();
           setMessage(
             `Producto ${codigo}${color ? ` (${color})` : ""}${talle ? ` Talle ${talle}` : ""} ` +
@@ -282,51 +399,104 @@
         }
       });
 
-      downloadBtn.addEventListener("click", () => {
-        if (!pedido.length) {
-          setMessage("El pedido esta vacio.", true);
+      togglePedidoBtn.addEventListener("click", () => {
+        const clienteInput = document.getElementById("clienteInput");
+        const pedidoNumeroInput = document.getElementById("pedidoNumeroInput");
+
+        if (!pedidoAbierto) {
+          const cliente = clienteInput.value.trim();
+          const numeroPedido = pedidoNumeroInput.value.trim();
+          const openOrders = getSavedOpenOrders();
+          const savedOrder = openOrders[numeroPedido];
+
+          if (!numeroPedido) {
+            setMessage("Ingresa el numero de pedido.", true);
+            return;
+          }
+
+          if (savedOrder) {
+            clienteActual = savedOrder.cliente || "";
+            numeroPedidoActual = savedOrder.numeroPedido || numeroPedido;
+            pedido.length = 0;
+            (savedOrder.items || []).forEach((item) => pedido.push(item));
+            clienteInput.value = clienteActual;
+            setMessage(`Pedido #${numeroPedidoActual} recuperado para ${clienteActual}.`);
+          } else {
+            if (!cliente) {
+              setMessage("Ingresa el nombre del cliente para un pedido nuevo.", true);
+              return;
+            }
+            clienteActual = cliente;
+            numeroPedidoActual = numeroPedido;
+            pedido.length = 0;
+            setMessage(`Pedido #${numeroPedidoActual} abierto para ${clienteActual}.`);
+          }
+
+          pedidoAbierto = true;
+          saveCurrentOrder();
+          renderPedido();
+          updatePedidoUIState();
           return;
         }
 
-        const totalGeneral = pedido.reduce((acc, item) => acc + (Number(item.TOTAL) || 0), 0);
-        const exportRows = pedido.map((item) => ({
-          CODIGO: item.CODIGO,
-          COLOR: item.COLOR,
-          TALLE: item.TALLE,
-          DESCRIPCION: item.DESCRIPCION,
-          MAYORISTA: item.MAYORISTA,
-          CANTIDAD: item.CANTIDAD,
-          "PRECIO U.": Number(item["PRECIO U."]) || 0,
-          TOTAL: Number(item.TOTAL) || 0
-        }));
+        const ok = downloadPedidoExcel();
+        if (!ok) return;
 
-        exportRows.push({
-          CODIGO: "",
-          COLOR: "",
-          TALLE: "",
-          DESCRIPCION: "",
-          MAYORISTA: "",
-          CANTIDAD: "",
-          "PRECIO U.": "",
-          TOTAL: ""
-        });
-        exportRows.push({
-          CODIGO: "",
-          COLOR: "",
-          TALLE: "",
-          DESCRIPCION: "",
-          MAYORISTA: "",
-          CANTIDAD: "",
-          "PRECIO U.": "TOTAL GENERAL",
-          TOTAL: totalGeneral
-        });
-
-        const ws = XLSX.utils.json_to_sheet(exportRows);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Pedido");
-        XLSX.writeFile(wb, "pedido_para_clienta.xlsx");
+        pedido.length = 0;
+        renderPedido();
+        deleteSavedOrder(numeroPedidoActual);
+        pedidoAbierto = false;
+        clienteActual = "";
+        numeroPedidoActual = "";
+        clienteInput.value = "";
+        pedidoNumeroInput.value = "";
+        setMessage("Pedido cerrado y Excel descargado.");
+        updatePedidoUIState();
       });
 
+      llamarPedidoBtn.addEventListener("click", () => {
+        const clienteInput = document.getElementById("clienteInput");
+        const pedidoNumeroInput = document.getElementById("pedidoNumeroInput");
+        const numeroPedidoBuscado = pedidoNumeroInput.value.trim();
+
+        if (!numeroPedidoBuscado) {
+          setMessage("Ingresa el numero de pedido que queres llamar.", true);
+          return;
+        }
+
+        const openOrders = getSavedOpenOrders();
+        const savedOrder = openOrders[numeroPedidoBuscado];
+        if (!savedOrder) {
+          setMessage(`No existe un pedido abierto con numero ${numeroPedidoBuscado}.`, true);
+          return;
+        }
+
+        // Si hay uno abierto actualmente, lo guardamos antes de cambiar.
+        if (pedidoAbierto && numeroPedidoActual) {
+          saveCurrentOrder();
+        }
+
+        clienteActual = savedOrder.cliente || "";
+        numeroPedidoActual = savedOrder.numeroPedido || numeroPedidoBuscado;
+        pedido.length = 0;
+        (savedOrder.items || []).forEach((item) => pedido.push(item));
+        pedidoAbierto = true;
+        clienteInput.value = clienteActual;
+        pedidoNumeroInput.value = numeroPedidoActual;
+        renderPedido();
+        updatePedidoUIState();
+        setMessage(`Pedido #${numeroPedidoActual} cargado. Podes seguir agregando articulos.`);
+      });
+
+      downloadBtn.addEventListener("click", () => {
+        if (!pedidoAbierto) {
+          setMessage("No hay un pedido abierto.", true);
+          return;
+        }
+        downloadPedidoExcel();
+      });
+
+      updatePedidoUIState();
       refreshCatalogStatus();
     </script>
   </body>
