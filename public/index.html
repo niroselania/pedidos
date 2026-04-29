@@ -65,6 +65,42 @@
         color: #555;
         margin-top: 8px;
       }
+      .modalOverlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+      .modalCard {
+        background: #fff;
+        width: min(560px, 92vw);
+        max-height: 80vh;
+        border-radius: 10px;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+        padding: 16px;
+        overflow: auto;
+      }
+      .modalHeader {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+      }
+      .modalList {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      .modalList li {
+        padding: 10px;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        margin-bottom: 8px;
+        background: #fafafa;
+      }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   </head>
@@ -93,6 +129,7 @@
         <button id="togglePedidoBtn">Abrir pedido</button>
         <button id="guardarPedidoBtn">Guardar pedido en curso</button>
         <button id="llamarPedidoBtn">Llamar pedido abierto</button>
+        <button id="verPedidosBtn">Ver pedidos abiertos</button>
       </div>
       <div id="pedidoStatus" class="status"></div>
       <div class="row">
@@ -138,6 +175,16 @@
       </div>
     </div>
 
+    <div id="pedidosModal" class="modalOverlay">
+      <div class="modalCard">
+        <div class="modalHeader">
+          <strong>Pedidos abiertos</strong>
+          <button id="cerrarModalBtn">Cerrar</button>
+        </div>
+        <ul id="pedidosList" class="modalList"></ul>
+      </div>
+    </div>
+
     <script>
       const uploadBtn = document.getElementById("uploadBtn");
       const agregarBtn = document.getElementById("agregarBtn");
@@ -145,6 +192,10 @@
       const togglePedidoBtn = document.getElementById("togglePedidoBtn");
       const guardarPedidoBtn = document.getElementById("guardarPedidoBtn");
       const llamarPedidoBtn = document.getElementById("llamarPedidoBtn");
+      const verPedidosBtn = document.getElementById("verPedidosBtn");
+      const pedidosModal = document.getElementById("pedidosModal");
+      const cerrarModalBtn = document.getElementById("cerrarModalBtn");
+      const pedidosList = document.getElementById("pedidosList");
       const msg = document.getElementById("msg");
       const pedidoStatus = document.getElementById("pedidoStatus");
       const catalogStatus = document.getElementById("catalogStatus");
@@ -296,6 +347,30 @@
         document.getElementById("clienteInput").value = "";
         document.getElementById("pedidoNumeroInput").value = "";
         updatePedidoUIState();
+      }
+
+      function renderOpenOrdersModal() {
+        const openOrders = getSavedOpenOrders();
+        const orderNumbers = Object.keys(openOrders);
+        pedidosList.innerHTML = "";
+
+        if (!orderNumbers.length) {
+          const li = document.createElement("li");
+          li.textContent = "No hay pedidos abiertos.";
+          pedidosList.appendChild(li);
+          return;
+        }
+
+        orderNumbers
+          .sort((a, b) => a.localeCompare(b, "es", { numeric: true }))
+          .forEach((numero) => {
+            const order = openOrders[numero] || {};
+            const li = document.createElement("li");
+            const cliente = order.cliente || "(sin cliente)";
+            const items = Array.isArray(order.items) ? order.items.length : 0;
+            li.innerHTML = `<strong>Pedido:</strong> ${numero} | <strong>Cliente:</strong> ${cliente} | <strong>Items:</strong> ${items}`;
+            pedidosList.appendChild(li);
+          });
       }
 
       async function refreshCatalogStatus() {
@@ -511,6 +586,24 @@
         renderPedido();
         updatePedidoUIState();
         setMessage(`Pedido #${numeroPedidoActual} cargado. Podes seguir agregando articulos.`);
+      });
+
+      verPedidosBtn.addEventListener("click", () => {
+        if (pedidoAbierto && numeroPedidoActual) {
+          saveCurrentOrder();
+        }
+        renderOpenOrdersModal();
+        pedidosModal.style.display = "flex";
+      });
+
+      cerrarModalBtn.addEventListener("click", () => {
+        pedidosModal.style.display = "none";
+      });
+
+      pedidosModal.addEventListener("click", (e) => {
+        if (e.target === pedidosModal) {
+          pedidosModal.style.display = "none";
+        }
       });
 
       downloadBtn.addEventListener("click", () => {
