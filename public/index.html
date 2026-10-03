@@ -123,6 +123,10 @@
 
     <div class="card">
       <h3>2) Cargar pedido por codigo + color + talle + mayorista</h3>
+      <p class="hint" style="margin-top:0">
+        Si completas <strong>PRECIO U.</strong> el articulo se carga a mano y no depende del catalogo.
+        Si lo dejas vacio, se busca en la planilla subida.
+      </p>
       <div class="row">
         <input id="clienteInput" placeholder="CLIENTE" />
         <input id="pedidoNumeroInput" placeholder="N° PEDIDO" />
@@ -134,8 +138,10 @@
       <div id="pedidoStatus" class="status"></div>
       <div class="row">
         <input id="codigoInput" placeholder="CODIGO" />
+        <input id="descripcionInput" placeholder="DESCRIPCION (opcional)" />
         <input id="colorInput" placeholder="COLOR (opcional)" />
         <input id="talleInput" placeholder="TALLE (opcional)" />
+        <input id="precioInput" type="number" min="0" step="0.01" placeholder="PRECIO U. (manual)" title="Si lo completas, no se usa la planilla. Si lo dejas vacio, se busca en el catalogo." />
         <label for="mayoristaInput" style="font-size: 14px">Mayorista</label>
         <select id="mayoristaInput" title="SI usa PRECIO MAYORISTA; NO usa PRECIO MINORISTA">
           <option value="NO">NO</option>
@@ -172,6 +178,7 @@
       </table>
       <div class="row" style="margin-top: 12px">
         <button id="downloadBtn">Download Excel del pedido</button>
+        <a href="/api/history/download" download><button type="button">Descargar historial de pedidos cerrados (Excel)</button></a>
       </div>
     </div>
 
@@ -213,6 +220,12 @@
         msg.classList.toggle("danger", isError);
       }
 
+      function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, (c) => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        }[c]));
+      }
+
       function money(value) {
         return Number(value || 0).toFixed(2);
       }
@@ -224,37 +237,68 @@
           .replace(/\s+/g, "_");
       }
 
-      function getSavedOpenOrders() {
+      async function api(url, opts = {}) {
+        const res = await fetch(url, {
+          headers: { "Content-Type": "application/json" },
+          ...opts
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Error del servidor");
+        return data;
+      }
+
+      async function getSavedOpenOrders() {
         try {
-          const raw = localStorage.getItem(OPEN_ORDERS_STORAGE_KEY);
-          if (!raw) return {};
-          const parsed = JSON.parse(raw);
-          return parsed && typeof parsed === "object" ? parsed : {};
+          return await api("/api/orders");
         } catch {
+          setMessage("No se pudieron leer los pedidos del servidor.", true);
           return {};
         }
       }
 
-      function saveOpenOrders(openOrders) {
-        localStorage.setItem(OPEN_ORDERS_STORAGE_KEY, JSON.stringify(openOrders));
-      }
-
-      function saveCurrentOrder() {
+      async function saveCurrentOrder() {
         if (!pedidoAbierto || !numeroPedidoActual) return;
-        const openOrders = getSavedOpenOrders();
-        openOrders[numeroPedidoActual] = {
-          numeroPedido: numeroPedidoActual,
-          cliente: clienteActual,
-          items: pedido
-        };
-        saveOpenOrders(openOrders);
+        try {
+          await api(`/api/orders/${encodeURIComponent(numeroPedidoActual)}`, {
+            method: "PUT",
+            body: JSON.stringify({ cliente: clienteActual, items: pedido })
+          });
+        } catch {
+          setMessage("No se pudo guardar el pedido en el servidor.", true);
+        }
       }
 
-      function deleteSavedOrder(numeroPedido) {
-        const openOrders = getSavedOpenOrders();
-        if (openOrders[numeroPedido]) {
-          delete openOrders[numeroPedido];
-          saveOpenOrders(openOrders);
+      async function closeSavedOrder(numeroPedido) {
+        try {
+          await api(`/api/orders/${encodeURIComponent(numeroPedido)}/close`, {
+            method: "POST",
+            body: JSON.stringify({ cliente: clienteActual, items: pedido })
+          });
+        } catch (e) {
+          setMessage("No se pudo archivar el pedido: " + e.message, true);
+        }
+      }
+
+      // Migra pedidos que habian quedado guardados en este navegador (una sola vez)
+      async function migrateLocalOrders() {
+        try {
+          const raw = localStorage.getItem(OPEN_ORDERS_STORAGE_KEY);
+          if (!raw) return;
+          const local = JSON.parse(raw) || {};
+          const remote = await api("/api/orders");
+          let moved = 0;
+          for (const [numero, order] of Object.entries(local)) {
+            if (remote[numero]) continue;
+            await api(`/api/orders/${encodeURIComponent(numero)}`, {
+              method: "PUT",
+              body: JSON.stringify({ cliente: order.cliente, items: order.items })
+            });
+            moved++;
+          }
+          localStorage.removeItem(OPEN_ORDERS_STORAGE_KEY);
+          if (moved) setMessage(`${moved} pedido(s) de este navegador se pasaron al servidor.`);
+        } catch {
+          /* si falla, queda en localStorage y se reintenta la proxima vez */
         }
       }
 
@@ -281,11 +325,11 @@
           totalPedido += item.TOTAL;
           const tr = document.createElement("tr");
           tr.innerHTML = `
-            <td>${item.CODIGO}</td>
-            <td>${item.COLOR}</td>
-            <td>${item.TALLE}</td>
-            <td>${item.DESCRIPCION}</td>
-            <td>${item.MAYORISTA}</td>
+            <td>${escapeHtml(item.CODIGO)}</td>
+            <td>${escapeHtml(item.COLOR)}</td>
+            <td>${escapeHtml(item.TALLE)}</td>
+            <td>${escapeHtml(item.DESCRIPCION)}</td>
+            <td>${escapeHtml(item.MAYORISTA)}</td>
             <td class="right">${item.CANTIDAD}</td>
             <td class="right">${money(item["PRECIO U."])}</td>
             <td class="right">${money(item.TOTAL)}</td>
@@ -349,8 +393,8 @@
         updatePedidoUIState();
       }
 
-      function renderOpenOrdersModal() {
-        const openOrders = getSavedOpenOrders();
+      async function renderOpenOrdersModal() {
+        const openOrders = await getSavedOpenOrders();
         const orderNumbers = Object.keys(openOrders);
         pedidosList.innerHTML = "";
 
@@ -366,9 +410,9 @@
           .forEach((numero) => {
             const order = openOrders[numero] || {};
             const li = document.createElement("li");
-            const cliente = order.cliente || "(sin cliente)";
+            const cliente = escapeHtml(order.cliente || "(sin cliente)");
             const items = Array.isArray(order.items) ? order.items.length : 0;
-            li.innerHTML = `<strong>Pedido:</strong> ${numero} | <strong>Cliente:</strong> ${cliente} | <strong>Items:</strong> ${items}`;
+            li.innerHTML = `<strong>Pedido:</strong> ${escapeHtml(numero)} | <strong>Cliente:</strong> ${cliente} | <strong>Items:</strong> ${items}`;
             pedidosList.appendChild(li);
           });
       }
@@ -421,87 +465,124 @@
         }
 
         const codigo = document.getElementById("codigoInput").value.trim().toUpperCase();
+        const descripcion = document.getElementById("descripcionInput").value.trim();
         const color = document.getElementById("colorInput").value.trim().toUpperCase();
         const talle = document.getElementById("talleInput").value.trim().toUpperCase();
+        const precioRaw = document.getElementById("precioInput").value.trim().replace(",", ".");
+        const precioManual = precioRaw === "" ? null : Number(precioRaw);
         const mayorista = document.getElementById("mayoristaInput").value;
         const cantidad = Number(document.getElementById("cantidadInput").value || 0);
 
-        if (!codigo) {
-          setMessage("Ingresa un codigo de producto.", true);
+        if (!codigo && !descripcion) {
+          setMessage("Ingresa un codigo o una descripcion.", true);
           return;
         }
         if (!cantidad || cantidad <= 0) {
           setMessage("La cantidad debe ser mayor a 0.", true);
           return;
         }
+        if (precioManual !== null && (Number.isNaN(precioManual) || precioManual < 0)) {
+          setMessage("El precio no es valido.", true);
+          return;
+        }
 
-        try {
-          const params = new URLSearchParams();
-          if (color) params.set("color", color);
-          if (talle) params.set("talle", talle);
-          const query = params.toString();
-          const res = await fetch(
-            `/api/product/${encodeURIComponent(codigo)}${query ? `?${query}` : ""}`
-          );
-          const data = await res.json();
+        let row;
 
-          if (!res.ok) {
-            setMessage(data.error || "No se pudo buscar el producto.", true);
+        if (precioManual !== null) {
+          // Carga manual: no usa el catalogo
+          row = {
+            CODIGO: codigo,
+            COLOR: color,
+            TALLE: talle,
+            DESCRIPCION: descripcion,
+            MAYORISTA: mayorista,
+            CANTIDAD: cantidad,
+            "PRECIO U.": precioManual,
+            TOTAL: precioManual * cantidad
+          };
+        } else {
+          // Sin precio manual: se busca en el catalogo
+          if (!codigo) {
+            setMessage("Sin precio manual hace falta el codigo para buscar en el catalogo.", true);
             return;
           }
+          try {
+            const params = new URLSearchParams();
+            if (color) params.set("color", color);
+            if (talle) params.set("talle", talle);
+            const query = params.toString();
+            const res = await fetch(
+              `/api/product/${encodeURIComponent(codigo)}${query ? `?${query}` : ""}`
+            );
+            const data = await res.json();
 
-          const precioMinorista = Number(data.PRECIO) || 0;
-          const precioMayorista = Number(data.PRECIO_MAYORISTA) || 0;
-          let precioU = precioMinorista;
-
-          if (mayorista === "SI") {
-            if (!precioMayorista) {
+            if (!res.ok) {
               setMessage(
-                "Mayorista SI pero este producto no tiene PRECIO MAYORISTA en el listado (o es 0). Revisa la planilla.",
+                (data.error || "No se pudo buscar el producto.") +
+                  " Podes cargarlo a mano completando PRECIO U.",
                 true
               );
               return;
             }
-            precioU = precioMayorista;
+
+            const precioMinorista = Number(data.PRECIO) || 0;
+            const precioMayorista = Number(data.PRECIO_MAYORISTA) || 0;
+            let precioU = precioMinorista;
+
+            if (mayorista === "SI") {
+              if (!precioMayorista) {
+                setMessage(
+                  "Mayorista SI pero este producto no tiene PRECIO MAYORISTA en el listado (o es 0). Completa PRECIO U. a mano.",
+                  true
+                );
+                return;
+              }
+              precioU = precioMayorista;
+            }
+
+            row = {
+              CODIGO: data.CODIGO,
+              COLOR: data.COLOR,
+              TALLE: data.TALLE,
+              DESCRIPCION: descripcion || data.DESCRIPCION,
+              MAYORISTA: mayorista,
+              CANTIDAD: cantidad,
+              "PRECIO U.": precioU,
+              TOTAL: precioU * cantidad
+            };
+          } catch {
+            setMessage("No se pudo conectar con el servidor. Podes cargarlo a mano con PRECIO U.", true);
+            return;
           }
-
-          const row = {
-            CODIGO: data.CODIGO,
-            COLOR: data.COLOR,
-            TALLE: data.TALLE,
-            DESCRIPCION: data.DESCRIPCION,
-            MAYORISTA: mayorista,
-            CANTIDAD: cantidad,
-            "PRECIO U.": precioU,
-            TOTAL: precioU * cantidad
-          };
-
-          pedido.push(row);
-          saveCurrentOrder();
-          renderPedido();
-          setMessage(
-            `Producto ${codigo}${color ? ` (${color})` : ""}${talle ? ` Talle ${talle}` : ""} ` +
-              `(${mayorista === "SI" ? "precio mayorista" : "precio minorista"}) agregado al pedido.`
-          );
-        } catch {
-          setMessage("No se pudo conectar con el servidor.", true);
         }
+
+        pedido.push(row);
+        await saveCurrentOrder();
+        renderPedido();
+        setMessage(
+          `Producto ${codigo || descripcion}${color ? ` (${color})` : ""}${talle ? ` Talle ${talle}` : ""} ` +
+            `agregado (${precioManual !== null ? "precio manual" : "desde catalogo"}).`
+        );
+        // limpiar campos del articulo para el siguiente
+        ["codigoInput", "descripcionInput", "precioInput"].forEach(
+          (id) => (document.getElementById(id).value = "")
+        );
+        document.getElementById("codigoInput").focus();
       });
 
-      togglePedidoBtn.addEventListener("click", () => {
+      togglePedidoBtn.addEventListener("click", async () => {
         const clienteInput = document.getElementById("clienteInput");
         const pedidoNumeroInput = document.getElementById("pedidoNumeroInput");
 
         if (!pedidoAbierto) {
           const cliente = clienteInput.value.trim();
           const numeroPedido = pedidoNumeroInput.value.trim();
-          const openOrders = getSavedOpenOrders();
-          const savedOrder = openOrders[numeroPedido];
-
           if (!numeroPedido) {
             setMessage("Ingresa el numero de pedido.", true);
             return;
           }
+          const openOrders = await getSavedOpenOrders();
+          const savedOrder = openOrders[numeroPedido];
 
           if (savedOrder) {
             clienteActual = savedOrder.cliente || "";
@@ -522,7 +603,7 @@
           }
 
           pedidoAbierto = true;
-          saveCurrentOrder();
+          await saveCurrentOrder();
           renderPedido();
           updatePedidoUIState();
           return;
@@ -531,9 +612,9 @@
         const ok = downloadPedidoExcel();
         if (!ok) return;
 
+        await closeSavedOrder(numeroPedidoActual);
         pedido.length = 0;
         renderPedido();
-        deleteSavedOrder(numeroPedidoActual);
         pedidoAbierto = false;
         clienteActual = "";
         numeroPedidoActual = "";
@@ -543,18 +624,18 @@
         updatePedidoUIState();
       });
 
-      guardarPedidoBtn.addEventListener("click", () => {
+      guardarPedidoBtn.addEventListener("click", async () => {
         if (!pedidoAbierto || !numeroPedidoActual) {
           setMessage("No hay un pedido en curso para guardar.", true);
           return;
         }
-        saveCurrentOrder();
+        await saveCurrentOrder();
         const numeroGuardado = numeroPedidoActual;
         liberarPantallaSinCerrarPedido();
         setMessage(`Pedido #${numeroGuardado} guardado y disponible para retomarlo luego.`);
       });
 
-      llamarPedidoBtn.addEventListener("click", () => {
+      llamarPedidoBtn.addEventListener("click", async () => {
         const clienteInput = document.getElementById("clienteInput");
         const pedidoNumeroInput = document.getElementById("pedidoNumeroInput");
         const numeroPedidoBuscado = pedidoNumeroInput.value.trim();
@@ -564,7 +645,7 @@
           return;
         }
 
-        const openOrders = getSavedOpenOrders();
+        const openOrders = await getSavedOpenOrders();
         const savedOrder = openOrders[numeroPedidoBuscado];
         if (!savedOrder) {
           setMessage(`No existe un pedido abierto con numero ${numeroPedidoBuscado}.`, true);
@@ -573,7 +654,7 @@
 
         // Si hay uno abierto actualmente, lo guardamos antes de cambiar.
         if (pedidoAbierto && numeroPedidoActual) {
-          saveCurrentOrder();
+          await saveCurrentOrder();
         }
 
         clienteActual = savedOrder.cliente || "";
@@ -588,11 +669,11 @@
         setMessage(`Pedido #${numeroPedidoActual} cargado. Podes seguir agregando articulos.`);
       });
 
-      verPedidosBtn.addEventListener("click", () => {
+      verPedidosBtn.addEventListener("click", async () => {
         if (pedidoAbierto && numeroPedidoActual) {
-          saveCurrentOrder();
+          await saveCurrentOrder();
         }
-        renderOpenOrdersModal();
+        await renderOpenOrdersModal();
         pedidosModal.style.display = "flex";
       });
 
@@ -616,6 +697,7 @@
 
       updatePedidoUIState();
       refreshCatalogStatus();
+      migrateLocalOrders();
     </script>
   </body>
 </html>
