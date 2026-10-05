@@ -166,6 +166,7 @@
             <th>CANTIDAD</th>
             <th>PRECIO U.</th>
             <th>TOTAL</th>
+            <th></th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -173,6 +174,7 @@
           <tr>
             <td colspan="7" class="right"><strong>Total pedido</strong></td>
             <td id="totalPedido" class="right">0.00</td>
+            <td></td>
           </tr>
         </tfoot>
       </table>
@@ -317,12 +319,15 @@
           : "No hay pedido abierto.";
       }
 
+      function recalcTotalPedido() {
+        const total = pedido.reduce((acc, it) => acc + (Number(it.TOTAL) || 0), 0);
+        totalPedidoEl.textContent = money(total);
+      }
+
       function renderPedido() {
         tbody.innerHTML = "";
-        let totalPedido = 0;
 
-        pedido.forEach((item) => {
-          totalPedido += item.TOTAL;
+        pedido.forEach((item, index) => {
           const tr = document.createElement("tr");
           tr.innerHTML = `
             <td>${escapeHtml(item.CODIGO)}</td>
@@ -330,14 +335,45 @@
             <td>${escapeHtml(item.TALLE)}</td>
             <td>${escapeHtml(item.DESCRIPCION)}</td>
             <td>${escapeHtml(item.MAYORISTA)}</td>
-            <td class="right">${item.CANTIDAD}</td>
-            <td class="right">${money(item["PRECIO U."])}</td>
-            <td class="right">${money(item.TOTAL)}</td>
+            <td class="right"><input class="edit-cant" type="number" min="1" step="1" value="${Number(item.CANTIDAD) || 0}" style="width:70px" /></td>
+            <td class="right"><input class="edit-precio" type="number" min="0" step="0.01" value="${Number(item["PRECIO U."]) || 0}" style="width:110px" /></td>
+            <td class="right total-cell">${money(item.TOTAL)}</td>
+            <td><button type="button" class="del-item" title="Quitar este articulo">Quitar</button></td>
           `;
+
+          const cantInput = tr.querySelector(".edit-cant");
+          const precioInput = tr.querySelector(".edit-precio");
+          const totalCell = tr.querySelector(".total-cell");
+
+          const onEdit = async () => {
+            const cant = Number(cantInput.value);
+            const precio = Number(String(precioInput.value).replace(",", "."));
+            if (!(cant > 0) || Number.isNaN(precio) || precio < 0) {
+              setMessage("Cantidad o precio invalidos.", true);
+              cantInput.value = item.CANTIDAD;
+              precioInput.value = item["PRECIO U."];
+              return;
+            }
+            item.CANTIDAD = cant;
+            item["PRECIO U."] = precio;
+            item.TOTAL = cant * precio;
+            totalCell.textContent = money(item.TOTAL);
+            recalcTotalPedido();
+            await saveCurrentOrder();
+          };
+          cantInput.addEventListener("change", onEdit);
+          precioInput.addEventListener("change", onEdit);
+
+          tr.querySelector(".del-item").addEventListener("click", async () => {
+            pedido.splice(index, 1);
+            renderPedido();
+            await saveCurrentOrder();
+          });
+
           tbody.appendChild(tr);
         });
 
-        totalPedidoEl.textContent = money(totalPedido);
+        recalcTotalPedido();
       }
 
       function downloadPedidoExcel() {
